@@ -1,5 +1,7 @@
 #define _CRT_SECURE_NO_WARNINGS
 
+//new
+
 #include<stdio.h>
 #include<stdlib.h>
 #include<string.h>
@@ -9,13 +11,13 @@
 #include <iterator> 
 using namespace std;
 
-#define PER_DIEM 150
+#define PER_DIEM 0
 
 int per_diem_count = 0;
 
-int cost_per_hour = 345;
-int charge_per_hour = 725;
-int cost_per_plane = 135000;
+int cost_per_hour = 1600; //345
+int charge_per_hour = 1900;
+int cost_per_plane = 0; //135000
 int fractional_owners = 0; //per plane in 1/16ths
 int home_count = 0;
 int loan_ammount = 0;
@@ -26,23 +28,36 @@ int max_customer_flights = 0;
 int max_daily_flights = 0;
 int idle_count = 0;
 int no_flight_customer = 0;
+double deadhead_fill_chance = 0;
 
-#define NUM_CITIES 100
-#define NUM_PLANES 8
+#define MAX_DAILY_FLIGHTS 512
 
-#define SPEED 200
-#define POPULATION 40
+#define NUM_CITIES 500
+#define NUM_PLANES 50
+
+#define SPEED 300
+#define POPULATION 50
 						   
-#define RADIUS 400
+#define RADIUS 1000
+#define MAX_RANGE 1200
 #define HUB_CITY 0
 
-#define PRICE_SENSITIVITY .4
+//#define PRICE_SENSITIVITY 1.1
+#define PRICE_SENSITIVITY .45
+
 #define MIN_DIST 100
 
 #define PRINT 0
 
-#define CHARGE_DEADHEAD 1
-#define DOWN_TIME 100
+//#define CHARGE_DEADHEAD -1
+#define CHARGE_DEADHEAD 10
+
+#define DO_DEADHEADS 1
+#define NETWORK 1
+
+#define DOWN_TIME 180
+
+#define NO_OVERNIGHT 1
 
 #define pi 3.14159265358979323846
 
@@ -149,7 +164,7 @@ typedef struct
 	bool is_owner;
 }FLIGHT;
 
-FLIGHT schedule[365][256];
+FLIGHT schedule[365][MAX_DAILY_FLIGHTS];
 
 typedef struct
 {
@@ -208,7 +223,7 @@ int init_schedule()
 
 	for (kk = 0; kk < 365; kk++)
 	{
-		for (ii = 0; ii < 256; ii++)
+		for (ii = 0; ii < MAX_DAILY_FLIGHTS; ii++)
 		{
 			schedule[kk][ii].going = false;
 			schedule[kk][ii].departure_time = 100;
@@ -283,6 +298,7 @@ int load_cities(int num_cities, int radius, CITY home_city)
 			sscanf(line, "%s %s %s %s %s %s %s", ident, type, continent, iso_country, iso_region, lng, lat);
 
 			strcpy(city.code, ident);
+
 			if (type[0] == 'c')
 			{
 				city.type = CLOSED;
@@ -330,12 +346,15 @@ int load_cities(int num_cities, int radius, CITY home_city)
 		//		city.population = POPULATION;
 			}
 			
-			if ((!strcmp(continent, "NA") && !strcmp(iso_country, "US")) && (get_distance(city.location,home_city.location) < radius))
-	//		if (!strcmp(iso_region, "US-WA") || !strcmp(iso_region, "US-OR") || !strcmp(iso_region, "US-CA"))
-			//if ((!strcmp(continent, "NA") && (get_distance(city.location, home_city.location) < radius)))
+				if ( !strcmp(iso_country, "US") && (get_distance(city.location,home_city.location) < radius))
+			//if ((type[0] == 'l') && !strcmp(iso_country, "US") && (get_distance(city.location, home_city.location) < radius))
+			//if ((!strcmp(continent, "EU")) && (get_distance(city.location, home_city.location) < radius))
+			//if (!strcmp(iso_country, "JP") && (get_distance(city.location,home_city.location) < radius))
+			//if (!strcmp(iso_country, "GB") && (get_distance(city.location, home_city.location) < radius))
+
 			{
-			//	if (city.type == LARGE_AIRPORT )
-				if (city.type == LARGE_AIRPORT || city.type == MEDIUM_AIRPORT || city.type == SMALL_AIRPORT)
+				if (city.type == LARGE_AIRPORT || city.type == MEDIUM_AIRPORT )
+			//	if (city.type == LARGE_AIRPORT || city.type == MEDIUM_AIRPORT || city.type == SMALL_AIRPORT)
 				{
 					if (PRINT)
 					{
@@ -371,12 +390,19 @@ int load_cities(int num_cities, int radius, CITY home_city)
 
 	fclose(file);
 
+	if (ii == 0)
+	{
+		printf("No Cities Loaded\n");
+	}
+
 	if (PRINT)
 	{
-		for (ii = ii - 1; ii >= 0; ii--)
-		{
-			printf("%f,%f,0 \n", cities[ii].location.lon, cities[ii].location.lat);
-		}
+	
+			for (ii = ii - 1; ii >= 0; ii--)
+			{
+				printf("%f,%f,0 \n", cities[ii].location.lon, cities[ii].location.lat);
+			}
+	
 	}
 
 	return 0;
@@ -491,7 +517,34 @@ CITY get_random_city(int source_city_id)
 
 int get_departure_time()
 {
-	return (rand() % 24);
+	double number, u1,u2;
+	int hour;
+
+	u1 = (double)rand() / (double)RAND_MAX;
+	u2 = (double)rand() / (double)RAND_MAX;
+
+	number = sqrt(-2.0 * log(u1)) * cos(pi * 2 * u2);
+
+//	printf("%f\n",number);
+
+	number += 3;
+
+	if (number < 0)
+	{
+		number = 0;
+	}
+	else if (number > 6)
+	{
+		number = 6;
+	}
+
+	hour = number * 4;
+
+//	printf("%d\n",hour);
+
+	return hour;
+
+	return ((rand() % 22)+1);
 }
 
 TRIP get_trip(TRAVELER traveler)
@@ -506,7 +559,14 @@ TRIP get_trip(TRAVELER traveler)
 		trip.going = true;
 		trip.outbound.is_owner = traveler.ownership;
 		trip.outbound.source_city = traveler.city;
+
+		//limit range to something reasonable 
 		trip.outbound.destination_city = get_random_city(traveler.city.id);
+		while(get_distance(trip.outbound.source_city.location, trip.outbound.destination_city.location) > MAX_RANGE)
+		{
+			trip.outbound.destination_city = get_random_city(traveler.city.id);
+		}
+
 		trip.outbound.departure_time = get_departure_time();
 		trip.outbound.full = true;
 		trip.stay_length = get_stay_length();
@@ -518,6 +578,24 @@ TRIP get_trip(TRAVELER traveler)
 
 		trip.outbound.ETE = get_distance(trip.outbound.source_city.location, trip.outbound.destination_city.location) / SPEED;
 		trip.inbound.ETE = trip.outbound.ETE;
+
+
+		//doesnt let it do over midnight trips
+		while (trip.outbound.ETE + trip.outbound.departure_time > 24)
+		{
+			trip.outbound.departure_time = get_departure_time();
+		}
+	
+		while (trip.inbound.ETE + trip.inbound.departure_time > 24)
+		{
+			trip.inbound.departure_time = get_departure_time();
+		}
+
+		if (PRINT)
+		{
+	//		printf("%d\n", trip.outbound.departure_time);
+		}
+
 		//if (trip.outbound.ETE > 5.4)
 		//{
 		//	printf("bad");
@@ -594,6 +672,32 @@ int reset_plane_availability()
 	return pilot_count;
 }
 
+float get_deadhead_fill_chance(int dest_id, int source_id)
+{
+	int kk;
+	int ii;
+	int count = 0;
+	int total = 0;
+
+	for (kk = 0; kk < 365; kk++)
+	{
+
+		ii = 0;
+		while (schedule[kk][ii].going)
+		{
+			if ((schedule[kk][ii].destination_city.id == dest_id) && (schedule[kk][ii].source_city.id == source_id))
+			{
+				count++;
+			}
+			total++;
+			ii++;
+		}
+	}
+
+	return (float)count / 365;
+	//return (float)count / (float)total;
+}
+
 PLANE find_plane(int source_city_id, int hour, float ETE)
 {
 	int plane_id;
@@ -601,6 +705,8 @@ PLANE find_plane(int source_city_id, int hour, float ETE)
 	int jj;
 	PLANE deadhead_options[NUM_PLANES];
 	PLANE  plane;
+	int dead_head_time;
+	float chance;
 
 
 
@@ -633,6 +739,10 @@ PLANE find_plane(int source_city_id, int hour, float ETE)
 		}
 	}
 
+	//do deadhead
+
+
+
 	for (ii = 0; ii < NUM_PLANES; ii++)
 	{
 		deadhead_options[ii].distance = get_distance(cities[fleet[ii].city_id].location, cities[source_city_id].location);
@@ -640,7 +750,10 @@ PLANE find_plane(int source_city_id, int hour, float ETE)
 
 	}
 
-	qsort(deadhead_options, NUM_PLANES, sizeof(PLANE), compare_distance);
+	if (NETWORK)
+	{
+		qsort(deadhead_options, NUM_PLANES, sizeof(PLANE), compare_distance);
+	}
 
 		for (ii = 0; ii < NUM_PLANES; ii++)
 		{
@@ -648,8 +761,46 @@ PLANE find_plane(int source_city_id, int hour, float ETE)
 
 			for (jj = 0; jj < ETE + 1; jj++)
 			{
-				if (fleet[deadhead_options[ii].plane_id].busy[hour + jj] == true)
-			//	if (fleet[ii].busy[hour + jj] == true)
+				if (hour + jj <= 24)
+				{
+					//this finds a plane that is not busy while I need it
+					if (fleet[deadhead_options[ii].plane_id].busy[hour + jj] == true)
+						//	if (fleet[ii].busy[hour + jj] == true)
+					{
+						plane.booked = true;
+						break;
+					}
+				}
+				else
+				{
+					plane.booked = true;
+					break;
+				}
+			}
+
+			dead_head_time = deadhead_options[ii].distance / SPEED;
+
+			if (deadhead_options[ii].distance > MAX_RANGE)
+			{
+				plane.booked = true;
+				dead_head_time = -1;
+			}
+
+			for (jj = 0; jj < dead_head_time + 1; jj++)
+			{
+				//need to make this find a plane that I can get here in time
+
+				if (hour - jj >= 0)
+				{
+
+					if (fleet[deadhead_options[ii].plane_id].busy[hour - jj] == true)
+						//	if (fleet[ii].busy[hour + jj] == true)
+					{
+						plane.booked = true;
+						break;
+					}
+				}
+				else
 				{
 					plane.booked = true;
 					break;
@@ -657,6 +808,12 @@ PLANE find_plane(int source_city_id, int hour, float ETE)
 			}
 			if (plane.booked == false)
 			{
+				chance = get_deadhead_fill_chance(source_city_id, fleet[deadhead_options[ii].plane_id].city_id);
+
+				deadhead_fill_chance += chance;
+
+	//			printf("%f\n",chance);
+
 				return fleet[deadhead_options[ii].plane_id];
 			//	return fleet[ii];
 			}
@@ -685,7 +842,8 @@ int checkout_plane(int plane_id, int hour, float ETE)
 	}
 	*/
 
-		for (ii = -1; ii <= ETE + 2; ii++)
+	//going to run way more effieencet like a real airline 
+		for (ii = -1; ii <= ETE; ii++)
 		{
 			fleet[plane_id].busy[abs(hour + ii)%24] = true;
 		}
@@ -710,6 +868,11 @@ int create_schedule()
 
 	for (ii = 0; ii < NUM_CITIES; ii++)
 	{
+		if (PRINT)
+		{
+			printf("city %d\n", ii);
+		}
+
 		for (jj = 0; jj < cities[ii].population; jj++)
 		{
 
@@ -719,6 +882,7 @@ int create_schedule()
 
 			for (kk = 0; kk < 365; kk++)
 			{
+
 				trip = get_trip(traveler);
 
 				if (trip.going)
@@ -731,14 +895,14 @@ int create_schedule()
 						ll++;
 					}
 
-					if (ll > 256)
+
+					if (ll > MAX_DAILY_FLIGHTS)
 					{
 						printf("fix me\n");
 						//		ll = 1 / 0;
 					}
 
 					schedule[kk][ll] = trip.outbound;
-	
 					traveler_flight_count++;
 
 
@@ -756,6 +920,35 @@ int create_schedule()
 
 			
 					}
+
+					/*
+					if (DE_NETWORK)
+					{
+
+
+						if (trip.stay_length > 1)
+						{
+
+							trip.outbound.departure_time = (trip.outbound.departure_time + 6) % 24;
+							trip.inbound.departure_time = abs(trip.inbound.departure_time - 6) % 24;
+
+							ll = 0;
+							while (schedule[kk][ll].going)
+							{
+								ll++;
+							}
+							schedule[kk][ll] = trip.inbound; // repositioning
+
+							ll = 0;
+							while (schedule[kk + trip.stay_length][ll].going)
+							{
+								ll++;
+							}
+							schedule[kk + trip.stay_length][ll] = trip.outbound; //repositioning 
+						}
+					}
+					*/
+
 				}
 			}
 
@@ -775,7 +968,24 @@ int create_schedule()
 
 	for (kk = 0; kk < 365; kk++)
 	{
-		qsort(schedule[kk], 256, sizeof(FLIGHT), compare_departure_time);
+		qsort(schedule[kk], MAX_DAILY_FLIGHTS, sizeof(FLIGHT), compare_departure_time);
+
+
+	}
+
+	if (PRINT)
+	{
+
+		printf("daily flights\n");
+		for (kk = 0; kk < 365; kk++)
+		{
+			ii = 0;
+			while (schedule[kk][ii].going)
+			{
+				ii++;
+			}
+			printf("%d\n", ii);
+		}
 	}
 
 	return 0;
@@ -867,7 +1077,7 @@ int run_schedule()
 						printf("\n");
 					}
 				}
-				else
+				else if(DO_DEADHEADS)
 				{
 					//do deadhead
 					plane = find_plane(schedule[kk][ii].source_city.id, abs(schedule[kk][ii].departure_time - 6) % 24, 5);
@@ -889,6 +1099,11 @@ int run_schedule()
 						{
 							cash += charge_per_hour*ETE;
 							revenue += charge_per_hour*ETE;
+
+							if ((rand() % 10) > CHARGE_DEADHEAD-1)
+							{
+								paid_hours_flown += ETE;
+							}
 						}
 
 						//do the flight
@@ -1033,17 +1248,32 @@ int main()
 
 	strcpy(khio.code, "KHIO");
 
-	//khio.location.lat = 45.548066;
-	//khio.location.lon = -122.949218;
+	khio.location.lat = 45.548066;
+	khio.location.lon = -122.949218;
 
 	//khio.location.lat = 38.987095;
 	//khio.location.lon = -94.843528;
 
+//	khio.location.lat = 40.611013;
+//	khio.location.lon = -122.369124;
+	
 
-	khio.location.lat = 46.8;
-	khio.location.lon = 7.7;
+	//khio.location.lat = 35.709989;
+	//khio.location.lon = 139.729874;
+
+	//khio.location.lat = 46.8;
+	//khio.location.lon = 7.7;
+
+	//35.709989, 139.729874
 
 	//38.987095, -94.843528
+
+	//khio.location.lat = 53.452755;
+	//khio.location.lon = -2.307568;
+
+	//khio.location.lat = 40.16043;
+	//khio.location.lon = -100.740379;
+
 
 	
 	err = fopen_s(&file, "C:\\Users\\bhoward\\Documents\\Visual Studio 2015\\Projects\\airport_simulator\\profit.csv", "w");
@@ -1090,6 +1320,7 @@ int main()
 			printf("no flight customers %d\n",no_flight_customer);
 			printf("overbooked count %d\n", total_overbooked_count /ii);
 			printf("overbooked percent %d\n", total_overbooked_count*100/ (flight_count - deadhead_count));
+			printf("deadhead fill chance %f\n", deadhead_fill_chance/deadhead_count);
 			printf("fleet size %d\n",NUM_PLANES);
 			printf("flying days %d\n",flying_days);
 			printf("Idle planes per day %2.1f\n", (idle_count/365)/(float)ii);
@@ -1097,17 +1328,18 @@ int main()
 			printf("flights per day per plane %2.1f\n", (float)flight_count / (NUM_PLANES * 365 * ii));
 			printf("total flights %6.0d, paid flights %d, deadhead flights %6.0d, owner flights %6.0f, percent deadhead flights %2.2f\n", flight_count/ii, (flight_count-deadhead_count-owner_flight_count)/ii, deadhead_count/ii, (float)owner_flight_count / ii,(float)deadhead_count / flight_count);
 			printf("total hours %6.0f, paid hours %6.0f, deadhead hours %6.0f, owner hours %6.0f, percent deadhead hours %2.2f\n", hours_flown/ii, paid_hours_flown/ii, (hours_flown-paid_hours_flown-owner_hours_flown)/ii, owner_hours_flown/ii, (float)(hours_flown - paid_hours_flown - owner_hours_flown) / hours_flown);
-			printf("hours flown per plane per year %4.0f, average deadhead flight length %2.1f, average paid flight length %2.1f\n",hours_flown/(NUM_PLANES*ii), (hours_flown-paid_hours_flown-owner_hours_flown) / deadhead_count,paid_hours_flown / (flight_count - deadhead_count- owner_flight_count));
+			printf("hours flown per plane per year %4.0f, average deadhead flight length %2.2f, average paid flight length %2.2f\n",hours_flown/(NUM_PLANES*ii), (hours_flown-paid_hours_flown-owner_hours_flown) / deadhead_count,paid_hours_flown / (flight_count - deadhead_count- owner_flight_count));
 			
 
 			printf("avg nights home %d\n", home_count / (NUM_PLANES*ii));
-			printf("cash %d\n", cash/(ii));
-			printf("revenue %d\n", revenue/ii);
+			printf("cash    %9.0d\n", cash/(ii));
+			printf("        mmmttthhh\n", cash / (ii));
+			printf("revenue %9.0d\n", revenue/ii);
 	//		printf("       222111000\n", revenu);
 
 			printf("profit margin %2.1f\n", (float)cash*100 / revenue);
 
-			printf("Charge per hour Face Rate %d, Effective Rate %f\n",charge_per_hour, (float)(revenue + (PER_DIEM * total_per_diem_count)) / paid_hours_flown);
+			printf("Charge per hour Face Rate %d, Effective Rate %6.0f\n",charge_per_hour, (float)(revenue + (PER_DIEM * total_per_diem_count) - ((cost_per_plane / 16.0)* fractional_owners * (1 + management_fee) * NUM_PLANES)) / paid_hours_flown);
 
 		fprintf(file, "%d,\n", cash/ii);
 	}
@@ -1117,3 +1349,6 @@ int main()
 
 	c = getchar();
 }
+
+//	revenue += (cost_per_plane / 16.0)* fractional_owners * (1 + management_fee) * NUM_PLANES;
+//revenue += (fractional_owners / 16.0)* loan_ammount * interest_rate * NUM_PLANES;
